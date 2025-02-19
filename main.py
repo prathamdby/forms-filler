@@ -35,18 +35,24 @@ class FormFiller:
             for question in questions:
                 options = question.locator("div[role='radio']").all()
                 if options:
-                    random_option = random.choice(options)
-                    random_option.scroll_into_view_if_needed()
-                    random_option.click()
+                    filtered_options = [
+                        option
+                        for option in options
+                        if option.get_attribute("data-value") != "__other_option__"
+                    ]
+                    chosen_option = (
+                        random.choice(filtered_options)
+                        if filtered_options
+                        else random.choice(options)
+                    )
+                    chosen_option.scroll_into_view_if_needed()
+                    chosen_option.click()
                     time.sleep(0.1)
 
             submit_button = self.page.locator("div[role='button'][jsname='M2UYVd']")
             submit_button.click()
 
-            self.page.wait_for_function(
-                "() => /\\/formResponse($|\\?)/.test(window.location.href)",
-                timeout=8000,
-            )
+            self.page.wait_for_url("**/formResponse*")
             return True
 
         except Exception as e:
