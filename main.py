@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import logging
+import multiprocessing
 import random
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, Page, Browser
 
 
@@ -52,34 +54,14 @@ class FormFiller:
             return False
 
     def run(self):
-        """Run the form filling process for the specified number of times."""
-        logging.info(
-            f"Starting form submission for {self.submission_count} submissions"
-        )
-        start_time = time.time()
-
-        for i in range(self.submission_count):
-            try:
-                if self.fill_form():
-                    self.successful_submissions += 1
-                    if self.successful_submissions % 5 == 0:
-                        current_rate = self.successful_submissions / (
-                            time.time() - start_time
-                        )
-                        logging.info(
-                            f"Completed {self.successful_submissions}/{self.submission_count} "
-                            f"submissions. Rate: {current_rate:.2f}/sec"
-                        )
-                else:
-                    self.failed_submissions += 1
-
-            except Exception as e:
-                self.failed_submissions += 1
-                logging.error(f"Submission {i+1} failed: {str(e)}")
-
-        duration = time.time() - start_time
-        self.log_summary(duration)
+        """Run a single form submission."""
+        success = self.fill_form()
+        if success:
+            self.successful_submissions += 1
+        else:
+            self.failed_submissions += 1
         self.cleanup()
+        return success
 
     def log_summary(self, duration: float):
         """Log the summary of the form filling process."""
@@ -113,6 +95,76 @@ def setup_logging():
     )
 
 
+def submission_worker(form_url: str) -> bool:
+    """Worker function for handling a single form submission in a separate thread."""
+    try:
+        form_filler = FormFiller(form_url, submission_count=1)
+        return form_filler.run()
+    except Exception as e:
+        logging.error(f"Worker thread error: {str(e)}")
+        return False
+
+
+def run_threaded_submissions(
+    form_url: str, submission_count: int, max_workers: int = None
+):
+    """Run form submissions using multiple threads."""
+    successful_submissions = 0
+    failed_submissions = 0
+    start_time = time.time()
+
+    # Use CPU count for optimal number of workers
+    cpu_count = multiprocessing.cpu_count()
+    usable_cpu_count = max(cpu_count // 2, 1)  # Use only half of the available cores
+    if max_workers is None:
+        max_workers = min(usable_cpu_count, submission_count)
+
+    logging.info(
+        f"Starting {submission_count} threaded submissions with {max_workers} workers "
+        f"(System has {cpu_count} CPU cores)"
+    )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks and store futures
+        futures = [
+            executor.submit(submission_worker, form_url)
+            for _ in range(submission_count)
+        ]
+
+        # Process completed futures as they finish
+        for i, future in enumerate(as_completed(futures), 1):
+            try:
+                if future.result():
+                    successful_submissions += 1
+                else:
+                    failed_submissions += 1
+
+                # Log progress every 5 submissions
+                if i % 5 == 0:
+                    current_rate = i / (time.time() - start_time)
+                    logging.info(
+                        f"Completed {i}/{submission_count} submissions. "
+                        f"Current rate: {current_rate:.2f}/sec"
+                    )
+
+            except Exception as e:
+                failed_submissions += 1
+                logging.error(f"Future error: {str(e)}")
+
+    # Log final summary
+    duration = time.time() - start_time
+    logging.info(
+        f"""
+Thread pool submission completed:
+- Total submissions attempted: {submission_count}
+- Successful submissions: {successful_submissions}
+- Failed submissions: {failed_submissions}
+- Time taken: {duration:.2f} seconds
+- Average rate: {successful_submissions / duration:.2f} submissions/second
+"""
+    )
+
+
 def main():
     """Main entry point of the script."""
     setup_logging()
@@ -128,8 +180,9 @@ def main():
             print("Please enter a valid number.")
 
     try:
-        form_filler = FormFiller(form_url, submission_count)
-        form_filler.run()
+        run_threaded_submissions(
+            form_url, submission_count
+        )  # max_workers will be auto-calculated
     except KeyboardInterrupt:
         logging.info("Operation interrupted by user")
         sys.exit(1)
