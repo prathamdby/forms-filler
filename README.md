@@ -5,10 +5,11 @@ A Python script using Playwright to automatically fill Google Forms containing M
 ## Features
 
 - Automatically fills Google Forms with random selections for MCQ questions
-- Runs in headless mode (no visible browser)
+- Runs in non-headless mode (browser window is visible)
 - Platform-independent with minimal setup
 - Provides real-time progress updates
 - Shows submission statistics upon completion
+- Utilizes multi-threading to perform parallel submissions leveraging available CPU cores
 
 ## Prerequisites
 
