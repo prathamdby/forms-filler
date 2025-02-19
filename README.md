@@ -39,7 +39,7 @@ python main.py
    - Enter the number of submissions you want to make
 
 The script will then:
-- Initialize a headless Chromium browser
+- Initialize a Chromium browser
 - Fill each form with random selections for all MCQ questions
 - Submit the form
 - Repeat the process for the specified number of times
@@ -50,7 +50,6 @@ The script will then:
 - This script only works with Multiple Choice Questions (MCQs)
 - The form must be publicly accessible (no login required)
 - Make sure you have a stable internet connection
-- The script uses Chromium in headless mode, so you won't see the browser window
 - Running many submissions might be rate-limited by Google
 - Platform independent - works on Windows, macOS, and Linux without any additional setup
 
