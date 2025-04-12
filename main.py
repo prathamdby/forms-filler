@@ -3,197 +3,310 @@
 import logging
 import multiprocessing
 import random
+import string
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from playwright.sync_api import sync_playwright, Page, Browser
+from playwright.sync_api import Browser, Page, sync_playwright
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+DEFAULT_TIMEOUT = 10000
+SUBMIT_BUTTON_SELECTOR = "div[role='button'][jsname='M2UYVd']"
+QUESTION_CONTAINER_SELECTOR = "div[role='listitem']"
+RADIO_GROUP_SELECTOR = "div[role='radiogroup']"
+RADIO_OPTION_SELECTOR = "div[role='radio']"
+CHECKBOX_SELECTOR = "div[role='checkbox']"
+HEADING_SELECTOR = "div[role='heading']"
+INPUT_SELECTOR = "input"
+OTHER_OPTION_VALUE = "__other_option__"
 
 
 class FormFiller:
-    def __init__(self, form_url: str, submission_count: int):
+    def __init__(self, form_url: str):
         self.form_url = form_url
-        self.submission_count = submission_count
-        self.successful_submissions = 0
-        self.failed_submissions = 0
-        self.setup_browser()
-
-    def setup_browser(self):
-        """Initialize Playwright browser with appropriate options."""
         self.playwright = sync_playwright().start()
-        self.browser: Browser = self.playwright.chromium.launch(headless=False)
+        self.browser: Browser = self.playwright.chromium.launch(headless=True)
         self.context = self.browser.new_context()
         self.page: Page = self.context.new_page()
-        self.page.set_default_timeout(10000)
+        self.page.set_default_timeout(DEFAULT_TIMEOUT)
+
+    def _generate_email(self) -> str:
+        domains = ["example.com", "test.com", "sample.net", "demo.org"]
+        username = "".join(random.choices(string.ascii_lowercase, k=8))
+        return f"{username}@{random.choice(domains)}"
+
+    def _generate_name(self) -> str:
+        first_names = [
+            "John",
+            "Mary",
+            "James",
+            "Patricia",
+            "Michael",
+            "Jennifer",
+            "William",
+            "Linda",
+            "David",
+            "Elizabeth",
+        ]
+        last_names = [
+            "Smith",
+            "Johnson",
+            "Williams",
+            "Jones",
+            "Brown",
+            "Davis",
+            "Miller",
+            "Wilson",
+            "Moore",
+            "Taylor",
+        ]
+        return f"{random.choice(first_names)} {random.choice(last_names)}"
+
+    def _generate_text(self) -> str:
+        words = [
+            "great",
+            "excellent",
+            "good",
+            "best",
+            "better",
+            "awesome",
+            "nice",
+            "perfect",
+            "wonderful",
+            "amazing",
+        ]
+        return " ".join(random.sample(words, random.randint(3, 6)))
+
+    def _fill_radio_group(self, container):
+        radio_group = container.locator(RADIO_GROUP_SELECTOR)
+        options = radio_group.locator(RADIO_OPTION_SELECTOR).all()
+        if not options:
+            return
+
+        filtered_options = [
+            opt
+            for opt in options
+            if opt.get_attribute("data-value") != OTHER_OPTION_VALUE
+        ]
+        chosen_option = random.choice(filtered_options or options)
+        chosen_option.scroll_into_view_if_needed()
+        chosen_option.click()
+
+    def _fill_checkbox_group(self, container):
+        heading_locator = container.locator(HEADING_SELECTOR)
+        question_text = (
+            heading_locator.inner_text().lower() if heading_locator.count() > 0 else ""
+        )
+
+        selection_limit = None
+        if "select top" in question_text:
+            try:
+                limit_str = question_text.split("select top")[1].strip().split()[0]
+                selection_limit = int(limit_str)
+            except (ValueError, IndexError, AttributeError):
+                logging.warning(
+                    f"Could not parse selection limit from: {question_text}"
+                )
+
+        checkboxes = container.locator(CHECKBOX_SELECTOR).all()
+        if not checkboxes:
+            return
+
+        filtered_checkboxes = [
+            cb
+            for cb in checkboxes
+            if cb.get_attribute("data-value") != OTHER_OPTION_VALUE
+        ]
+        eligible_checkboxes = filtered_checkboxes or checkboxes
+
+        if selection_limit:
+            num_to_select = min(selection_limit, len(eligible_checkboxes))
+        else:
+            num_to_select = random.randint(
+                1, min(3, len(eligible_checkboxes))
+            )  # Default to selecting 1-3
+
+        selected_checkboxes = random.sample(eligible_checkboxes, num_to_select)
+        for checkbox in selected_checkboxes:
+            checkbox.scroll_into_view_if_needed()
+            checkbox.click()
+            time.sleep(0.1)
+
+    def _fill_text_input(self, container):
+        input_element = container.locator(INPUT_SELECTOR).first
+        if input_element.count() == 0:
+            return
+
+        heading_locator = container.locator(HEADING_SELECTOR)
+        question_text = (
+            heading_locator.inner_text().lower() if heading_locator.count() > 0 else ""
+        )
+
+        fill_value = ""
+        if "email" in question_text:
+            fill_value = self._generate_email()
+        elif "name" in question_text:
+            fill_value = self._generate_name()
+        else:
+            fill_value = self._generate_text()
+
+        input_element.fill(fill_value)
+
+    def _process_question_container(self, container):
+        if container.locator(RADIO_GROUP_SELECTOR).count() > 0:
+            self._fill_radio_group(container)
+        elif container.locator(CHECKBOX_SELECTOR).count() > 0:
+            self._fill_checkbox_group(container)
+        elif container.locator(INPUT_SELECTOR).count() > 0:
+            self._fill_text_input(container)
+        else:
+            logging.warning("Unknown question type in container.")
 
     def fill_form(self) -> bool:
-        """Fill a single form with random choices."""
         try:
             self.page.goto(self.form_url)
+            question_containers = self.page.locator(QUESTION_CONTAINER_SELECTOR).all()
 
-            questions = self.page.locator("div[role='radiogroup']").all()
+            for container in question_containers:
+                self._process_question_container(container)
+                time.sleep(0.1)
 
-            for question in questions:
-                options = question.locator("div[role='radio']").all()
-                if options:
-                    filtered_options = [
-                        option
-                        for option in options
-                        if option.get_attribute("data-value") != "__other_option__"
-                    ]
-                    chosen_option = (
-                        random.choice(filtered_options)
-                        if filtered_options
-                        else random.choice(options)
-                    )
-                    chosen_option.scroll_into_view_if_needed()
-                    chosen_option.click()
-                    time.sleep(0.1)
-
-            submit_button = self.page.locator("div[role='button'][jsname='M2UYVd']")
+            submit_button = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+            if submit_button.count() == 0:
+                logging.error("Submit button not found.")
+                return False
             submit_button.click()
 
             self.page.wait_for_url("**/formResponse*")
+            logging.info(f"Successfully submitted form: {self.form_url}")
             return True
 
         except Exception as e:
-            logging.error(f"Error filling form: {str(e)}")
+            logging.error(f"Error filling form {self.form_url}: {e}")
             return False
 
-    def run(self):
-        """Run a single form submission."""
+    def run_submission(self) -> bool:
         success = self.fill_form()
-        if success:
-            self.successful_submissions += 1
-        else:
-            self.failed_submissions += 1
         self.cleanup()
         return success
 
-    def log_summary(self, duration: float):
-        """Log the summary of the form filling process."""
-        logging.info(
-            f"""
-Form submission completed:
-- Total submissions attempted: {self.submission_count}
-- Successful submissions: {self.successful_submissions}
-- Failed submissions: {self.failed_submissions}
-- Time taken: {duration:.2f} seconds
-- Average rate: {self.successful_submissions / duration:.2f} submissions/second
-"""
-        )
-
     def cleanup(self):
-        """Clean up resources."""
         try:
-            self.context.close()
-            self.browser.close()
-            self.playwright.stop()
+            if self.context:
+                self.context.close()
+            if self.browser:
+                self.browser.close()
+            if self.playwright:
+                self.playwright.stop()
         except Exception as e:
-            logging.error(f"Error during cleanup: {str(e)}")
-
-
-def setup_logging():
-    """Set up logging configuration."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+            logging.error(f"Error during cleanup: {e}")
 
 
 def submission_worker(form_url: str) -> bool:
-    """Worker function for handling a single form submission in a separate thread."""
+    form_filler = None
     try:
-        form_filler = FormFiller(form_url, submission_count=1)
-        return form_filler.run()
+        form_filler = FormFiller(form_url)
+        return form_filler.run_submission()
     except Exception as e:
-        logging.error(f"Worker thread error: {str(e)}")
+        logging.error(f"Worker thread error for {form_url}: {e}")
         return False
+    finally:
+        if form_filler:
+            form_filler.cleanup()
 
 
 def run_threaded_submissions(
     form_url: str, submission_count: int, max_workers: int = None
 ):
-    """Run form submissions using multiple threads."""
     successful_submissions = 0
     failed_submissions = 0
     start_time = time.time()
 
-    # Use CPU count for optimal number of workers
     cpu_count = multiprocessing.cpu_count()
-    usable_cpu_count = max(cpu_count // 2, 1)  # Use only half of the available cores
-    if max_workers is None:
-        max_workers = min(usable_cpu_count, submission_count)
+    default_workers = max(cpu_count // 2, 1)
+    workers = min(max_workers or default_workers, submission_count)
 
     logging.info(
-        f"Starting {submission_count} threaded submissions with {max_workers} workers "
-        f"(System has {cpu_count} CPU cores)"
+        f"Starting {submission_count} submissions for {form_url} with {workers} workers "
+        f"(System CPUs: {cpu_count})"
     )
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks and store futures
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(submission_worker, form_url)
             for _ in range(submission_count)
         ]
 
-        # Process completed futures as they finish
         for i, future in enumerate(as_completed(futures), 1):
             try:
                 if future.result():
                     successful_submissions += 1
                 else:
                     failed_submissions += 1
-
-                # Log progress every 5 submissions
-                if i % 5 == 0:
-                    current_rate = i / (time.time() - start_time)
-                    logging.info(
-                        f"Completed {i}/{submission_count} submissions. "
-                        f"Current rate: {current_rate:.2f}/sec"
-                    )
-
             except Exception as e:
                 failed_submissions += 1
-                logging.error(f"Future error: {str(e)}")
+                logging.error(f"Future result error: {e}")
 
-    # Log final summary
+            if i % 10 == 0 or i == submission_count:
+                elapsed = time.time() - start_time
+                rate = i / elapsed if elapsed > 0 else 0
+                logging.info(
+                    f"Progress: {i}/{submission_count} ({successful_submissions} success, {failed_submissions} fail). "
+                    f"Rate: {rate:.2f}/sec"
+                )
+
     duration = time.time() - start_time
+    final_rate = successful_submissions / duration if duration > 0 else 0
     logging.info(
         f"""
-Thread pool submission completed:
-- Total submissions attempted: {submission_count}
-- Successful submissions: {successful_submissions}
-- Failed submissions: {failed_submissions}
-- Time taken: {duration:.2f} seconds
-- Average rate: {successful_submissions / duration:.2f} submissions/second
-"""
+    ----------------------------------------
+    Submission Summary for: {form_url}
+    ----------------------------------------
+    Total Attempted:  {submission_count}
+    Successful:       {successful_submissions}
+    Failed:           {failed_submissions}
+    Total Time:       {duration:.2f} seconds
+    Average Rate:     {final_rate:.2f} submissions/second
+    ----------------------------------------
+    """
     )
+    return successful_submissions, failed_submissions
+
+
+def get_user_input():
+    form_url = input("Enter the Google Form URL: ").strip()
+    while not form_url:
+        print("Form URL cannot be empty.")
+        form_url = input("Enter the Google Form URL: ").strip()
+
+    submission_count = 0
+    while submission_count <= 0:
+        try:
+            count_str = input("Enter the number of submissions to make: ").strip()
+            submission_count = int(count_str)
+            if submission_count <= 0:
+                print("Please enter a positive number for submissions.")
+        except ValueError:
+            print("Invalid number entered. Please enter an integer.")
+
+    return form_url, submission_count
 
 
 def main():
-    """Main entry point of the script."""
-    setup_logging()
-
-    form_url = input("Enter the Google Form URL: ")
-    while True:
-        try:
-            submission_count = int(input("Enter the number of submissions to make: "))
-            if submission_count > 0:
-                break
-            print("Please enter a positive number.")
-        except ValueError:
-            print("Please enter a valid number.")
+    form_url, submission_count = get_user_input()
 
     try:
-        run_threaded_submissions(
-            form_url, submission_count
-        )  # max_workers will be auto-calculated
+        run_threaded_submissions(form_url, submission_count)
     except KeyboardInterrupt:
-        logging.info("Operation interrupted by user")
+        logging.info("Operation interrupted by user.")
         sys.exit(1)
     except Exception as e:
-        logging.error(f"Fatal error: {str(e)}")
+        logging.error(f"An unexpected error occurred: {e}")
         sys.exit(1)
 
 
